@@ -1,4 +1,6 @@
-/* Static demo: recreates the live app's behaviors without a server. */
+/* Static demo: recreates the live app's behaviors without a server.
+   localStorage acts as the demo database: every save/link/unlink/delete
+   writes a page snapshot that is restored on revisit and cleared on refresh. */
 (() => {
   const BOOKS = [
     { pk: 2701, title: "Moby Dick", authors: "Melville, Herman", downloads: 51220 },
@@ -9,6 +11,7 @@
   const BOOK_TITLES = { 2701: "Moby Dick", 17452: "Romeo and Juliet", 58890: "Alice's Adventures in Wonderland" };
   const PFX = "../".repeat(+document.body.dataset.depth || 0);
   const main = document.querySelector("main .container");
+  const STATE_KEY = "catalog-demo:page:" + location.pathname;
   const formData = (f) => JSON.stringify([...new FormData(f)].sort());
 
   function flash(text, kind = "success") {
@@ -24,35 +27,62 @@
   function banner() {
     const div = document.createElement("div");
     div.className = "msg info demo";
-    div.textContent = "Demo snapshot with fake data. Your saves are kept in this browser until you refresh.";
+    div.textContent = "Demo snapshot with fake data. Your changes are kept in this browser until you refresh.";
     div.addEventListener("click", () => div.remove());
     main.prepend(div);
     setTimeout(() => div.remove(), 9000);
   }
 
-  const val = (f, name) => (f.querySelector(`[name=${name}]`) || {}).value || "";
-
-  function cloneRow(tableId, patch) {
-    const table = document.getElementById(tableId);
-    if (!table) return null;
-    const rows = table.tBodies[0];
-    const first = rows.querySelector("tr:not(.demo-empty)");
-    const tr = document.createElement("tr");
-    if (first && !first.classList.contains("empty-row")) {
-      tr.innerHTML = first.innerHTML;
-      patch(tr);
-    } else {
-      const empty = rows.querySelector("tr");
-      if (empty) empty.remove();
-      buildRow(tr, tableId, patch);
-    }
-    rows.appendChild(tr);
-    return tr;
+  /* ---- the demo database: snapshot of every saved table + the record form ---- */
+  function saveForm() {
+    const sf = document.querySelector("button.save") ? document.querySelector("button.save").closest("form") : null;
+    if (!sf) return {};
+    const form = {};
+    for (const [k, v] of new FormData(sf)) form[k] = v;
+    for (const cb of sf.querySelectorAll("input[type=checkbox]")) form["cb:" + cb.name] = cb.checked ? "1" : "0";
+    return form;
   }
+
+  function saveState() {
+    const state = { form: saveForm(), tables: {} };
+    for (const t of document.querySelectorAll("table[id]")) {
+      if (/hits$/.test(t.id) || t.id === "books-body") continue;
+      state.tables[t.id] = t.outerHTML;
+    }
+    localStorage.setItem(STATE_KEY, JSON.stringify(state));
+  }
+
+  function applyState(state) {
+    if (!state) return false;
+    let touched = false;
+    if (state.form && Object.keys(state.form).length) {
+      const sf = document.querySelector("button.save") ? document.querySelector("button.save").closest("form") : null;
+      if (sf) {
+        for (const [k, v] of Object.entries(state.form)) {
+          if (k.startsWith("cb:")) {
+            const cb = sf.querySelector('[name="' + k.slice(3) + '"]');
+            if (cb) { cb.checked = v === "1"; touched = true; }
+            continue;
+          }
+          const el = sf.querySelector('[name="' + k + '"]');
+          if (el && el.type !== "hidden") { el.value = v; touched = true; }
+        }
+      }
+    }
+    for (const [id, html] of Object.entries(state.tables || {})) {
+      const t = document.getElementById(id);
+      if (t) { t.outerHTML = html; touched = true; }
+    }
+    return touched;
+  }
+
+  const val = (f, name) => (f.querySelector(`[name=${name}]`) || {}).value || "";
 
   function buildRow(tr, tableId, data) {
     const unlink = (op, extra) =>
-      `<form method="post" action="#" class="inline"><input type="hidden" name="op" value="${op}"><input type="hidden" name="action" value="unlink">${extra}<button class="danger" data-confirm="Unlink in the demo?">${"Unlink"}</button></form>`;
+      `<form method="post" action="#" class="inline"><input type="hidden" name="op" value="${op}"><input type="hidden" name="action" value="unlink">${extra}<button class="danger" data-confirm="Unlink in the demo?">Unlink</button></form>`;
+    const del = (op) =>
+      `<form method="post" action="#" class="inline"><input type="hidden" name="op" value="${op}"><input type="hidden" name="action" value="delete"><button class="danger" data-confirm="Delete in the demo?">Delete</button></form>`;
     const map = {
       "authors-table": `<td>${data.name} <span class="meta">#${data.pk}</span></td><td><div class="row-edit tight"><span class="meta">${data.role || "Creator (cr)"}</span></div></td>`,
       "subjects-table": `<td>${data.name}</td><td class="act">${unlink("book_subject", `<input type="hidden" name="fk_subjects" value="${data.pk}"><input type="hidden" name="fk_books" value="0">`)}</td>`,
@@ -60,33 +90,20 @@
       "languages-table": `<td>${data.name}</td><td class="act">${unlink("book_lang", `<input type="hidden" name="fk_langs" value="${data.pk}"><input type="hidden" name="fk_books" value="0">`)}</td>`,
       "loccs-table": `<td>${data.name}</td><td class="act">${unlink("book_locc", `<input type="hidden" name="fk_loccs" value="${data.pk}"><input type="hidden" name="fk_books" value="0">`)}</td>`,
       "books-table": `<td>${data.name} <span class="meta">#${data.pk}</span></td><td><div class="row-edit tight"><span class="meta">${data.role || "Creator (cr)"}</span></div></td>`,
-      "aliases-table": `<td colspan="2">${data.name} <span class="meta">${data.heading}</span></td><td class="act"><form method="post" action="#"><input type="hidden" name="op" value="alias"><input type="hidden" name="action" value="delete"><button class="danger" data-confirm="Delete in the demo?">Delete</button></form></td>`,
-      "urls-table": `<td colspan="2">${data.name} <span class="meta">${data.url}</span></td><td class="act"><form method="post" action="#"><input type="hidden" name="op" value="author_url"><input type="hidden" name="action" value="delete"><button class="danger" data-confirm="Delete in the demo?">Delete</button></form></td>`,
-      "attributes-table": `<td>${data.name} <span class="meta">${data.tag}</span></td><td>${data.ind || "  "}</td><td>${data.nonfiling || 0}</td><td>${data.text}</td><td class="act"><form method="post" action="#"><input type="hidden" name="op" value="attribute"><input type="hidden" name="action" value="delete"><button class="danger" data-confirm="Delete in the demo?">Delete</button></form></td>`,
+      "aliases-table": `<td colspan="2">${data.name} <span class="meta">${data.heading}</span></td><td class="act">${del("alias")}</td>`,
+      "urls-table": `<td colspan="2">${data.name} <span class="meta">${data.url}</span></td><td class="act">${del("author_url")}</td>`,
+      "attributes-table": `<td>${data.name} <span class="meta">${data.tag}</span></td><td>${data.ind || "  "}</td><td>${data.nonfiling || 0}</td><td>${data.text}</td><td class="act">${del("attribute")}</td>`,
     };
     tr.innerHTML = map[tableId] || `<td>${data.name}</td>`;
   }
-
-  const TABLE_EMPTY = {
-    "authors-table": "No authors.",
-    "subjects-table": "No subjects linked.",
-    "categories-table": "None linked.",
-    "languages-table": "None linked.",
-    "loccs-table": "None linked.",
-    "books-table": "No books linked.",
-    "aliases-table": "No aliases.",
-    "urls-table": "No URLs.",
-    "attributes-table": "No attributes.",
-  };
 
   function addRow(tableId, data) {
     const table = document.getElementById(tableId);
     if (!table) return flash("Linked (demo).");
     const tbody = table.tBodies[0];
-    tbody.querySelectorAll("tr .empty, tr td.empty").forEach((td) => td.closest("tr").remove());
-    const first = tbody.querySelector("tr td.empty") ? null : tbody.rows[0];
+    if (tbody.rows[0] && tbody.rows[0].querySelector("td.empty")) tbody.rows[0].remove();
     const tr = document.createElement("tr");
-    if (tbody.rows.length && !tbody.rows[0].querySelector("td.empty")) {
+    if (tbody.rows.length) {
       tr.innerHTML = tbody.rows[0].innerHTML;
       if (tableId === "authors-table" || tableId === "books-table") {
         const a = tr.querySelector("a");
@@ -94,10 +111,9 @@
         const meta = tr.querySelector(".meta");
         if (meta) meta.textContent = "#" + data.pk;
       } else {
-        tr.querySelector("td").innerHTML = `${data.name}` + (tableId === "subjects-table" || tableId === "categories-table" || tableId === "languages-table" || tableId === "loccs-table" ? "" : "");
+        tr.querySelector("td").textContent = data.name;
       }
     } else {
-      if (tbody.rows[0] && tbody.rows[0].querySelector("td.empty")) tbody.rows[0].remove();
       buildRow(tr, tableId, data);
     }
     tbody.appendChild(tr);
@@ -106,21 +122,29 @@
 
   function removeRow(form) {
     const tr = form.closest("tr");
-    if (tr) {
-      const table = tr.closest("table");
-      const emptyText = TABLE_EMPTY[table && table.id] || "None.";
-      if (table && table.tBodies[0].rows.length <= 1) {
-        tr.innerHTML = `<td colspan="5" class="empty">${emptyText}</td>`;
-        flash(table.id === "aliases-table" || table.id === "urls-table" || table.id === "attributes-table" ? "Deleted (demo)." : "Unlinked (demo).");
-        return;
-      }
-      tr.remove();
-    }
-    flash(form.querySelector('[name=action]').value === "unlink" ? "Unlinked (demo)." : "Deleted (demo).");
+    const action = (form.querySelector("[name=action]") || {}).value;
+    const verb = action === "unlink" ? "Unlinked (demo)." : "Deleted (demo).";
+    if (!tr) return flash(verb);
+    tr.remove();
+    flash(verb);
   }
 
   document.addEventListener("DOMContentLoaded", () => {
     banner();
+
+    /* demo database: refresh clears it, revisits restore it */
+    const last = sessionStorage.getItem("catalog-demo:last");
+    sessionStorage.setItem("catalog-demo:last", location.pathname);
+    let restored = false;
+    if (last === location.pathname) {
+      Object.keys(localStorage).filter((k) => k.indexOf("catalog-demo:") === 0).forEach((k) => localStorage.removeItem(k));
+      flash("Demo changes cleared on refresh.", "info");
+    } else {
+      try {
+        const saved = JSON.parse(localStorage.getItem(STATE_KEY) || "null");
+        if (saved) restored = applyState(saved);
+      } catch (err) { /* ignore */ }
+    }
 
     /* save-on-modify, unsaved warnings, Enter blocking (same as the live app) */
     const base = new Map();
@@ -149,8 +173,9 @@
       const b = e.target.closest("[data-confirm]");
       if (b && !window.confirm(b.getAttribute("data-confirm"))) { e.preventDefault(); e.stopPropagation(); }
     });
+    if (restored) flash("Restored the changes you saved earlier (demo).", "info");
 
-    /* POST forms: simulate every catalog action */
+    /* POST forms: simulate every catalog action, then write the demo database */
     document.addEventListener("submit", (e) => {
       const f = e.target;
       if (f.getAttribute("method") !== "post") return;
@@ -160,53 +185,64 @@
       const action = val(f, "action") || "link";
 
       if (action === "update") {
-        if (op === "book" || op === "author" || ["subject", "category", "lang", "locc"].includes(op)) {
-          if (f.querySelector("button.save")) {
-            const data = {};
-            for (const [k, v] of new FormData(f)) data[k] = v;
-            localStorage.setItem(KEY, JSON.stringify(data));
-            base.set(f, snap(f));
-            sync(f);
-            return flash("Saved (demo). Kept in your browser until you refresh.");
+        if (op === "author_transfer") { flash("Transferred (demo)."); return saveState(); }
+        if (f.querySelector("button.save")) {
+          base.set(f, snap(f));
+          sync(f);
+          const sv = f.querySelector("button.save");
+          if (sv) {
+            const old = sv.textContent;
+            sv.textContent = "Saved \u2713";
+            sv.style.display = "";
+            setTimeout(() => { sv.textContent = old; sync(f); }, 1200);
           }
+          flash("Saved (demo). Kept in your browser until you refresh.");
+          return saveState();
         }
-        if (op === "author_transfer") return flash("Transferred (demo).");
-        return flash("Saved (demo).");
+        flash("Saved (demo).");
+        return saveState();
       }
-      if (action === "unlink" || (action === "delete" && ["alias", "author_url", "attribute"].includes(op))) return removeRow(f);
+      if (action === "unlink" || (action === "delete" && ["alias", "author_url", "attribute"].includes(op))) {
+        removeRow(f);
+        return saveState();
+      }
       if (action === "delete") {
         flash("Deleted (demo).");
         const back = document.querySelector(".links-nav a");
-        if (back) setTimeout(() => (location.href = back.href), 900);
-        return;
+        setTimeout(() => { if (back) location.href = back.href; }, 900);
+        return saveState();
       }
       /* links and creates */
       if (op === "book_author") {
         const pk = +val(f, "fk_authors") || 0;
         const a = f.closest("tr") && f.closest("tr").querySelector("a");
         const name = AUTHOR_NAMES[pk] || (a ? a.textContent : "") || "Author #" + pk;
-        const roleSel = f.querySelector('[name=fk_roles]');
-        return addRow("authors-table", { name, pk, role: roleSel ? roleSel.options[roleSel.selectedIndex].text : "" });
+        const roleSel = f.querySelector("[name=fk_roles]");
+        addRow("authors-table", { name, pk, role: roleSel ? roleSel.options[roleSel.selectedIndex].text : "" });
+        return saveState();
       }
       if (op === "book_subject") {
         const pk = val(f, "fk_subjects");
-        const name = (f.closest("tr") && f.closest("tr").querySelector("a") || {}).textContent || "Subject #" + pk;
-        return addRow("subjects-table", { name: name || "Subject #" + pk, pk });
+        const a = f.closest("tr") && f.closest("tr").querySelector("a");
+        const name = (a ? a.textContent : "") || "Subject #" + pk;
+        addRow("subjects-table", { name, pk });
+        return saveState();
       }
-      if (op === "book_category") { const sel = f.querySelector("select"); return addRow("categories-table", { name: sel.options[sel.selectedIndex].text, pk: sel.value }); }
-      if (op === "book_lang") { const sel = f.querySelector("select"); return addRow("languages-table", { name: sel.options[sel.selectedIndex].text, pk: sel.value }); }
-      if (op === "book_locc") { const sel = f.querySelector("select"); return addRow("loccs-table", { name: sel.options[sel.selectedIndex].text, pk: sel.value }); }
+      if (op === "book_category") { const sel = f.querySelector("select"); addRow("categories-table", { name: sel.options[sel.selectedIndex].text, pk: sel.value }); return saveState(); }
+      if (op === "book_lang") { const sel = f.querySelector("select"); addRow("languages-table", { name: sel.options[sel.selectedIndex].text, pk: sel.value }); return saveState(); }
+      if (op === "book_locc") { const sel = f.querySelector("select"); addRow("loccs-table", { name: sel.options[sel.selectedIndex].text, pk: sel.value }); return saveState(); }
       if (op === "attribute") {
-        const sel = f.querySelector('[name=fk_attriblist]');
-        return addRow("attributes-table", {
+        const sel = f.querySelector("[name=fk_attriblist]");
+        addRow("attributes-table", {
           name: sel.options[sel.selectedIndex].text, tag: val(f, "fk_attriblist"),
           text: val(f, "text"), ind: val(f, "indicators") || "  ", nonfiling: val(f, "nonfiling") || 0,
         });
+        return saveState();
       }
-      if (op === "alias") return addRow("aliases-table", { name: val(f, "alias"), heading: val(f, "heading") === "1" ? "Yes" : "No" });
-      if (op === "author_url") return addRow("urls-table", { name: val(f, "description") || val(f, "url"), url: val(f, "url") });
-      if (op === "author") return addRow("authors-list", { name: val(f, "author"), pk: "new", role: "", heading: "" });
-      if (op === "subject" || op === "category" || op === "lang" || op === "locc") {
+      if (op === "alias") { addRow("aliases-table", { name: val(f, "alias"), heading: val(f, "heading") === "1" ? "Yes" : "No" }); return saveState(); }
+      if (op === "author_url") { addRow("urls-table", { name: val(f, "description") || val(f, "url"), url: val(f, "url") }); return saveState(); }
+      if (op === "author") { addRow("authors-list", { name: val(f, "author"), pk: "new" }); return saveState(); }
+      if (["subject", "category", "lang", "locc"].includes(op)) {
         const body = document.getElementById("rows-table");
         if (body) {
           const name = val(f, op === "subject" ? "subject" : op === "category" ? "category" : op === "lang" ? "lang" : "locc");
@@ -214,16 +250,18 @@
           tr.innerHTML = `<td class="num">${val(f, "pk") || "new"}</td><td>${name}</td>`;
           body.tBodies[0].appendChild(tr);
         }
-        return flash("Added (demo).");
+        flash("Added (demo).");
+        return saveState();
       }
       /* author page: link ebooks by number */
-      if (f.querySelector('[name=book_pks]')) {
+      if (f.querySelector("[name=book_pks]")) {
         const ids = (val(f, "book_pks").match(/\d+/g) || []).slice(0, 8);
         if (!ids.length) return flash("Enter at least one ebook number.", "error");
         ids.forEach((pk) => addRow("books-table", { name: BOOK_TITLES[+pk] || "Ebook #" + pk, pk, role: "" }));
-        return;
+        return saveState();
       }
       flash("Linked (demo).");
+      saveState();
     });
 
     /* GET search forms: client-side filtering over the demo snapshot */
@@ -256,8 +294,8 @@
       const f = e.target;
       if (f.getAttribute("method") !== "get" || !f.querySelector("input[type=search], input[name=q]")) return;
       e.preventDefault();
-      const qOf0 = (n) => { const el = f.querySelector('input[name="' + n + '"][type="search"]'); return el ? el.value : null; };
-      const q = qOf0("q") || qOf0("aq") || qOf0("sq") || qOf0("bq") || qOf0("tq") || "";
+      const qOf = (n) => { const el = f.querySelector('input[name="' + n + '"][type="search"]'); return el ? el.value : null; };
+      const q = qOf("q") || qOf("aq") || qOf("sq") || qOf("bq") || qOf("tq") || "";
 
       const booksBody = document.getElementById("books-body");
       if (booksBody) {
@@ -268,7 +306,6 @@
           : `<tr><td colspan="3" class="empty">No ebooks matched \u201C${q}\u201D.</td></tr>`;
         return;
       }
-      const qOf = (n) => { const el = f.querySelector('input[name="' + n + '"][type="search"]'); return el ? el.value : null; };
       const ah = document.getElementById("author-hits");
       if (ah && qOf("aq") !== null) { ah.hidden = false; return filterTable(ah, q, "No authors matched."); }
       const sh = document.getElementById("subject-hits");
@@ -289,30 +326,5 @@
         document.querySelectorAll('[id^="report-"]').forEach((d) => (d.hidden = d.id !== "report-" + e.target.value));
       }
     });
-
-    /* save button backed by localStorage: kept until you refresh */
-    const last = sessionStorage.getItem("catalog-demo:last");
-    sessionStorage.setItem("catalog-demo:last", location.pathname);
-    const KEY = "catalog-demo:" + location.pathname;
-    if (last === location.pathname) {
-      Object.keys(localStorage).filter((k) => k.indexOf("catalog-demo:") === 0).forEach((k) => localStorage.removeItem(k));
-      flash("Demo changes cleared on refresh.", "info");
-    } else {
-      const saved = localStorage.getItem(KEY);
-      if (saved) {
-        try {
-          const data = JSON.parse(saved);
-          const f = document.querySelector("button.save") ? document.querySelector("button.save").closest("form") : null;
-          if (f) {
-            for (const [k, v] of Object.entries(data)) {
-              const el = f.querySelector('[name="' + k + '"]');
-              if (el && el.type !== "hidden") { if (el.type === "checkbox") el.checked = !!v; else el.value = v; }
-            }
-            base.set(f, snap(f));
-            flash("Restored the changes you saved earlier (demo).", "info");
-          }
-        } catch (err) { /* ignore */ }
-      }
-    }
   });
 })();

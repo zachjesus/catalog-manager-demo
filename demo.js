@@ -5,7 +5,7 @@
     { pk: 17452, title: "Romeo and Juliet", authors: "Shakespeare, William", downloads: 40120 },
     { pk: 58890, title: "Alice's Adventures in Wonderland", authors: "Carroll, Lewis", downloads: 84932 },
   ];
-  const AUTHOR_NAMES = { 30: "Carroll, Lewis", 57: "Shakespeare, William", 19: "Melville, Herman" };
+  const AUTHOR_NAMES = { 19: "Melville, Herman", 30: "Carroll, Lewis", 57: "Shakespeare, William", 88: "Anonymous" };
   const BOOK_TITLES = { 2701: "Moby Dick", 17452: "Romeo and Juliet", 58890: "Alice's Adventures in Wonderland" };
   const PFX = "../".repeat(+document.body.dataset.depth || 0);
   const main = document.querySelector("main .container");
@@ -24,7 +24,7 @@
   function banner() {
     const div = document.createElement("div");
     div.className = "msg info demo";
-    div.textContent = "Demo snapshot with fake data. Nothing you change is saved.";
+    div.textContent = "Demo snapshot with fake data. Your saves are kept in this browser until you refresh.";
     div.addEventListener("click", () => div.remove());
     main.prepend(div);
     setTimeout(() => div.remove(), 9000);
@@ -160,9 +160,15 @@
       const action = val(f, "action") || "link";
 
       if (action === "update") {
-        if (op === "book" || op === "author") {
-          base.set(f, snap(f)); sync(f);
-          return flash("Saved (demo).");
+        if (op === "book" || op === "author" || ["subject", "category", "lang", "locc"].includes(op)) {
+          if (f.querySelector("button.save")) {
+            const data = {};
+            for (const [k, v] of new FormData(f)) data[k] = v;
+            localStorage.setItem(KEY, JSON.stringify(data));
+            base.set(f, snap(f));
+            sync(f);
+            return flash("Saved (demo). Kept in your browser until you refresh.");
+          }
         }
         if (op === "author_transfer") return flash("Transferred (demo).");
         return flash("Saved (demo).");
@@ -275,13 +281,38 @@
       if (rt && qOf("q") !== null) return filterTable(rt, q, "No matches.");
     });
 
-    /* reports page: only the default report is in the demo */
+    /* reports page: switch between the three demo reports */
     document.addEventListener("change", (e) => {
       if (e.target.matches("select[data-autosubmit]")) {
         e.preventDefault();
         if (e.target.name === "days") return;
-        flash("The demo includes only the Books lacking report.", "info");
+        document.querySelectorAll('[id^="report-"]').forEach((d) => (d.hidden = d.id !== "report-" + e.target.value));
       }
     });
+
+    /* save button backed by localStorage: kept until you refresh */
+    const last = sessionStorage.getItem("catalog-demo:last");
+    sessionStorage.setItem("catalog-demo:last", location.pathname);
+    const KEY = "catalog-demo:" + location.pathname;
+    if (last === location.pathname) {
+      Object.keys(localStorage).filter((k) => k.indexOf("catalog-demo:") === 0).forEach((k) => localStorage.removeItem(k));
+      flash("Demo changes cleared on refresh.", "info");
+    } else {
+      const saved = localStorage.getItem(KEY);
+      if (saved) {
+        try {
+          const data = JSON.parse(saved);
+          const f = document.querySelector("button.save") ? document.querySelector("button.save").closest("form") : null;
+          if (f) {
+            for (const [k, v] of Object.entries(data)) {
+              const el = f.querySelector('[name="' + k + '"]');
+              if (el && el.type !== "hidden") { if (el.type === "checkbox") el.checked = !!v; else el.value = v; }
+            }
+            base.set(f, snap(f));
+            flash("Restored the changes you saved earlier (demo).", "info");
+          }
+        } catch (err) { /* ignore */ }
+      }
+    }
   });
 })();

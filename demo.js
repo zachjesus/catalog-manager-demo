@@ -150,7 +150,14 @@
     const base = new Map();
     const snap = (f) => formData(f);
     const dirty = () => [...document.querySelectorAll('form[method="post"]')].some((f) => !f.dataset.sent && base.has(f) && base.get(f) !== snap(f));
-    const sync = (f) => { const sv = f.querySelector("button.save"); if (!sv) return; sv.style.display = base.get(f) !== snap(f) ? "" : "none"; };
+    const sync = (f) => {
+      const sv = f.querySelector("button.save");
+      if (!sv) return;
+      const dirtyForm = base.get(f) !== snap(f);
+      sv.style.display = "";
+      sv.style.opacity = dirtyForm ? "" : "0.45";
+      sv.title = dirtyForm ? "" : "Modify a field to enable Save";
+    };
     for (const f of document.querySelectorAll('form[method="post"]')) {
       base.set(f, snap(f));
       f.addEventListener("submit", () => (f.dataset.sent = "1"));
